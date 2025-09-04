@@ -1,4 +1,4 @@
-package org.kvxd.nanocompanion
+package org.kvxd.nanocompanion.ble
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -11,6 +11,7 @@ import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
+import org.kvxd.nanocompanion.MediaControl
 import org.kvxd.nanocompanion.protocol.Packet
 import org.kvxd.nanocompanion.protocol.PacketFactory
 import org.kvxd.nanocompanion.protocol.PacketType
@@ -18,7 +19,6 @@ import org.kvxd.nanocompanion.protocol.ReadBuffer
 import org.kvxd.nanocompanion.protocol.WriteBuffer
 import org.kvxd.nanocompanion.protocol.packet.MediaCommandPacket
 import java.util.UUID
-import kotlin.math.exp
 
 class BLEController(private val context: Context) {
 

@@ -4,13 +4,14 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.annotation.RequiresPermission
 import androidx.compose.material3.*
 import androidx.core.app.ActivityCompat
+import org.kvxd.nanocompanion.ble.BLEController
+import org.kvxd.nanocompanion.ui.BleDeviceScannerScreen
 
 
 @OptIn(ExperimentalMaterial3Api::class)

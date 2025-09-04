@@ -1,4 +1,4 @@
-package org.kvxd.nanocompanion
+package org.kvxd.nanocompanion.ui
 
 import android.widget.Toast
 import androidx.compose.foundation.clickable
@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import org.kvxd.nanocompanion.ble.BLEController
 
 @Composable
 fun BleDeviceScannerScreen(bleController: BLEController) {

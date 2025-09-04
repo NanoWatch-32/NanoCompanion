@@ -1,4 +1,4 @@
-package org.kvxd.nanocompanion
+package org.kvxd.nanocompanion.ble
 
 import android.bluetooth.BluetoothDevice
 
