@@ -85,6 +85,8 @@ class BLEController(private val context: Context) {
                 Log.d("BLE", "Connected to $deviceAddress")
                 connectedDeviceAddress.value = deviceAddress
 
+                MediaControl.notifyMediaChanged()
+
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 Log.d("BLE", "Disconnected from $deviceAddress")
@@ -125,6 +127,18 @@ class BLEController(private val context: Context) {
                 }
             } else {
                 Log.w("BLE", "Service discovery failed: $status")
+            }
+        }
+
+        override fun onCharacteristicWrite(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            status: Int
+        ) {
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d("BLE", "Characteristic write successful: ${characteristic.uuid}")
+            } else {
+                Log.e("BLE", "Characteristic write failed: $status")
             }
         }
 
@@ -288,10 +302,9 @@ class BLEController(private val context: Context) {
 
         val buffer = WriteBuffer()
         packet.encode(buffer)
-
         val encodedData = buffer.toByteArray()
 
-        val maxChunkSize = 18
+        val maxChunkSize = 128 - 2
         val totalLength = encodedData.size
         val numFragments = (totalLength + maxChunkSize - 1) / maxChunkSize
 
@@ -300,13 +313,15 @@ class BLEController(private val context: Context) {
             return
         }
 
-        val service = connectedGatt?.getService(UUID.fromString("0b60ab11-bc40-4d00-9ea4-5f2406872d9f"))
-        val characteristic = service?.getCharacteristic(UUID.fromString("cfa93afb-2c3d-4a76-a182-67e8b6d50b55"))
+        val service = connectedGatt?.getService(serviceUUID)
+        val characteristic = service?.getCharacteristic(characteristicUUID)
 
         if (characteristic == null) {
             Log.e("BLE", "Characteristic not found")
             return
         }
+
+        Log.d("BLE", "Sending packet ${packet.packetType} in $numFragments fragments, size: $totalLength bytes")
 
         for (i in 0 until numFragments) {
             val header = byteArrayOf(
@@ -320,12 +335,29 @@ class BLEController(private val context: Context) {
 
             val fragment = header + chunk
             characteristic.value = fragment
-            connectedGatt?.writeCharacteristic(characteristic)
 
-            Thread.sleep(10)
+            var success = false
+            var attempts = 0
+            val maxAttempts = 5
+
+            while (!success && attempts < maxAttempts) {
+                success = connectedGatt?.writeCharacteristic(characteristic) == true
+                if (!success) {
+                    attempts++
+                    Log.w("BLE", "Failed to write fragment $i, attempt $attempts")
+                    Thread.sleep(30)
+                }
+            }
+
+            if (!success) {
+                Log.e("BLE", "Failed to send fragment $i after $maxAttempts attempts")
+                return
+            }
+
+            Thread.sleep(200) // avoid overwhelming the esp
         }
 
-        Log.d("BLE", "Sent packet: ${packet.packetType}")
+        Log.d("BLE", "Successfully sent packet: ${packet.packetType}")
     }
 
     private fun hasBlePermissions(): Boolean {

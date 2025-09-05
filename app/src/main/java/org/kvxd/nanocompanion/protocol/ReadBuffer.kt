@@ -23,6 +23,26 @@ class ReadBuffer(private val data: ByteArray) {
         return java.lang.Float.intBitsToFloat(intValue)
     }
 
+    fun readLong(): Long {
+        checkBounds(8)
+        val value = (data[position].toLong() and 0xFFL) or
+                ((data[position + 1].toLong() and 0xFFL) shl 8) or
+                ((data[position + 2].toLong() and 0xFFL) shl 16) or
+                ((data[position + 3].toLong() and 0xFFL) shl 24) or
+                ((data[position + 4].toLong() and 0xFFL) shl 32) or
+                ((data[position + 5].toLong() and 0xFFL) shl 40) or
+                ((data[position + 6].toLong() and 0xFFL) shl 48) or
+                ((data[position + 7].toLong() and 0xFFL) shl 56)
+        position += 8
+        return value
+    }
+
+    fun readBoolean(): Boolean {
+        checkBounds(1)
+        val byte = data[position++]
+        return byte.toInt() != 0
+    }
+
     fun readString(): String {
         val length = readInt()
         checkBounds(length)

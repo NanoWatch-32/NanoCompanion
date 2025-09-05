@@ -11,14 +11,28 @@ import androidx.annotation.RequiresPermission
 import androidx.compose.material3.*
 import androidx.core.app.ActivityCompat
 import org.kvxd.nanocompanion.ble.BLEController
+import org.kvxd.nanocompanion.protocol.packet.MediaInfoPacket
 import org.kvxd.nanocompanion.ui.BleDeviceScannerScreen
 
 
 @OptIn(ExperimentalMaterial3Api::class)
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), MediaPacketSender {
 
     private lateinit var bleController: BLEController
     private val REQUEST_CODE_BLE = 1001
+
+    override fun sendMediaInfoPacket(info: MediaControl.MediaInfo) {
+        bleController.sendPacket(
+            MediaInfoPacket(
+                info.title ?: "Unknown",
+                info.artist ?: "Unknown",
+                info.album ?: "Unknown",
+                info.duration ?: -1,
+                info.position,
+                info.isPlaying
+            )
+        )
+    }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,7 +61,7 @@ class MainActivity : ComponentActivity() {
 
         if (MediaControl.hasPermissions(this)) {
             try {
-                MediaControl.initialize(this)
+                MediaControl.initialize(this, this)
             } catch (e: SecurityException) {
                 Toast.makeText(this, "Missing permission to control media.", Toast.LENGTH_LONG).show()
                 e.printStackTrace()

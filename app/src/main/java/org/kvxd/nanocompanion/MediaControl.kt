@@ -1,6 +1,5 @@
 package org.kvxd.nanocompanion
 
-
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -10,10 +9,20 @@ import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.*
 
 object MediaControl {
 
     private var mediaController: MediaController? = null
+    private var packetSender: MediaPacketSender? = null
+
+    private var scope: CoroutineScope? = null
+    // android sends multiple notifications on single state changes
+    // so a debounced flow is required in order not to overwhelm the esp32
+    private val mediaChangeFlow = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
+    private var lastSentMediaInfo: MediaInfo? = null
 
     fun hasPermissions(context: Context): Boolean {
         val cn = ComponentName(context, NotificationService::class.java)
@@ -32,12 +41,38 @@ object MediaControl {
         context.startActivity(intent)
     }
 
-    fun initialize(context: Context): Boolean {
+    fun initialize(context: Context, sender: MediaPacketSender): Boolean {
         val manager = context.getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
         val cn = ComponentName(context, NotificationService::class.java)
         val sessions = manager.getActiveSessions(cn)
         mediaController = sessions.firstOrNull()
+        packetSender = sender
+
+        if (scope == null) {
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            observeMediaChanges()
+        }
+
         return mediaController != null
+    }
+
+    fun notifyMediaChanged() {
+        mediaChangeFlow.tryEmit(Unit)
+    }
+
+    @OptIn(FlowPreview::class)
+    private fun observeMediaChanges() {
+        scope?.launch {
+            mediaChangeFlow
+                .debounce(1000)
+                .collect {
+                    val info = getMediaInfo() ?: return@collect
+                    if (info != lastSentMediaInfo) {
+                        packetSender?.sendMediaInfoPacket(info)
+                        lastSentMediaInfo = info
+                    }
+                }
+        }
     }
 
     fun getMediaInfo(): MediaInfo? {
@@ -79,7 +114,46 @@ object MediaControl {
         val position: Long,
         val isPlaying: Boolean
     )
-
 }
 
-class NotificationService : NotificationListenerService()
+
+class NotificationService : NotificationListenerService() {
+
+    private var mediaSessionManager: MediaSessionManager? = null
+    private var controllers: List<MediaController>? = null
+
+    private val mediaCallback = object : MediaController.Callback() {
+
+        override fun onPlaybackStateChanged(state: PlaybackState?) {
+            super.onPlaybackStateChanged(state)
+            MediaControl.notifyMediaChanged()
+        }
+
+        override fun onMetadataChanged(metadata: MediaMetadata?) {
+            super.onMetadataChanged(metadata)
+            MediaControl.notifyMediaChanged()
+        }
+    }
+
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+
+        mediaSessionManager = getSystemService(MEDIA_SESSION_SERVICE) as MediaSessionManager
+        val componentName = ComponentName(this, NotificationService::class.java)
+        controllers = mediaSessionManager?.getActiveSessions(componentName)
+
+        controllers?.forEach {
+            it.registerCallback(mediaCallback)
+        }
+    }
+
+    override fun onListenerDisconnected() {
+        super.onListenerDisconnected()
+
+        controllers?.forEach {
+            it.unregisterCallback(mediaCallback)
+        }
+
+        controllers = null
+    }
+}
