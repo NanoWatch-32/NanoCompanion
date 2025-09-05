@@ -1,5 +1,7 @@
 package org.kvxd.nanocompanion.ui
 
+import android.icu.util.TimeZone
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -14,6 +16,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import org.kvxd.nanocompanion.ble.BLEController
+import org.kvxd.nanocompanion.protocol.packet.TimeSyncPacket
 
 @Composable
 fun BleDeviceScannerScreen(bleController: BLEController) {
@@ -36,6 +39,22 @@ fun BleDeviceScannerScreen(bleController: BLEController) {
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Scan for devices")
+        }
+
+        Button(
+            onClick = {
+                val utcMillis = System.currentTimeMillis()
+                val tz = TimeZone.getDefault()
+
+                val millis = utcMillis + tz.getOffset(utcMillis)
+
+                bleController.sendPacket(
+                    TimeSyncPacket(millis)
+                )
+                      },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Sync Time")
         }
 
         Spacer(modifier = Modifier.height(16.dp))

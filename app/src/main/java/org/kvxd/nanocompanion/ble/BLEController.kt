@@ -18,6 +18,7 @@ import org.kvxd.nanocompanion.protocol.PacketType
 import org.kvxd.nanocompanion.protocol.ReadBuffer
 import org.kvxd.nanocompanion.protocol.WriteBuffer
 import org.kvxd.nanocompanion.protocol.packet.MediaCommandPacket
+import org.kvxd.nanocompanion.protocol.packet.TimeSyncPacket
 import java.util.UUID
 
 class BLEController(private val context: Context) {
@@ -84,8 +85,6 @@ class BLEController(private val context: Context) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
                 Log.d("BLE", "Connected to $deviceAddress")
                 connectedDeviceAddress.value = deviceAddress
-
-                MediaControl.notifyMediaChanged()
 
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
