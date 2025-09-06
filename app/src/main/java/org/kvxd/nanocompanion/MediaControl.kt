@@ -1,5 +1,6 @@
 package org.kvxd.nanocompanion
 
+import android.annotation.SuppressLint
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -64,7 +65,6 @@ object MediaControl {
     private fun observeMediaChanges() {
         scope?.launch {
             mediaChangeFlow
-                .debounce(1000)
                 .collect {
                     val info = getMediaInfo() ?: return@collect
                     if (info != lastSentMediaInfo) {
@@ -90,12 +90,12 @@ object MediaControl {
         )
     }
 
-    fun play() {
-        mediaController?.transportControls?.play()
-    }
-
-    fun pause() {
-        mediaController?.transportControls?.pause()
+    @SuppressLint("NewApi")
+    fun togglePlaying() {
+        if (mediaController?.playbackState?.isActive == true)
+            mediaController?.transportControls?.stop()
+        else
+            mediaController?.transportControls?.play()
     }
 
     fun next() {

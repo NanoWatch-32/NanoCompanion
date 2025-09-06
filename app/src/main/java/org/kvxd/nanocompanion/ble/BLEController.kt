@@ -6,19 +6,18 @@ import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
 import android.content.pm.PackageManager
-import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.ContextCompat
-import org.kvxd.nanocompanion.MediaControl
+import io.github.kvxd.ksignal.Signal
 import org.kvxd.nanocompanion.protocol.Packet
 import org.kvxd.nanocompanion.protocol.PacketFactory
 import org.kvxd.nanocompanion.protocol.PacketType
 import org.kvxd.nanocompanion.protocol.ReadBuffer
 import org.kvxd.nanocompanion.protocol.WriteBuffer
-import org.kvxd.nanocompanion.protocol.packet.MediaCommandPacket
-import org.kvxd.nanocompanion.protocol.packet.TimeSyncPacket
 import java.util.UUID
 
 class BLEController(private val context: Context) {
@@ -28,14 +27,15 @@ class BLEController(private val context: Context) {
     private var connectedGatt: BluetoothGatt? = null
     private var isScanning = mutableStateOf(false)
 
+    private val packetQueue = mutableListOf<Packet>()
+    private var isWriting = false
+
     private val serviceUUID = UUID.fromString("0b60ab11-bc40-4d00-9ea4-5f2406872d9f")
     private val characteristicUUID = UUID.fromString("cfa93afb-2c3d-4a76-a182-67e8b6d50b55")
     private val cccdUUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
-    private val fragmentBuffer = mutableListOf<Byte>()
-    private var expectedFragments = 0
-    private var receivedFragments = 0
-    private var currentPacketType: PacketType? = null
+    val connectedSignal = Signal<Unit>()
+    val packetReceivedSignal = Signal<Packet>()
 
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
     private val bluetoothAdapter = bluetoothManager.adapter
@@ -46,15 +46,14 @@ class BLEController(private val context: Context) {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val device = result.device
             if (scannedDevices.none { it.address == device.address }) {
-                scannedDevices.add(
-                    BleDevice(
-                        name = device.name ?: "Unknown Device",
-                        address = device.address,
-                        device = device
+                if (device.name != null)
+                    scannedDevices.add(
+                        BleDevice(
+                            name = device.name,
+                            address = device.address,
+                            device = device
+                        )
                     )
-                )
-
-                scannedDevices.sortBy { it.name != null }
             }
         }
 
@@ -93,6 +92,12 @@ class BLEController(private val context: Context) {
                     connectedDeviceAddress.value = null
                     connectedGatt = null
                 }
+                synchronized(packetQueue) {
+                    packetQueue.clear()
+                    isWriting = false
+
+                }
+
                 gatt.close()
             }
         }
@@ -118,8 +123,7 @@ class BLEController(private val context: Context) {
 
                 val descriptor = characteristic.getDescriptor(cccdUUID)
                 if (descriptor != null) {
-                    descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    gatt.writeDescriptor(descriptor)
+                    gatt.writeDescriptor(descriptor, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
                     Log.d("BLE", "Enabled notifications for characteristic")
                 } else {
                     Log.e("BLE", "CCCD descriptor not found")
@@ -134,10 +138,28 @@ class BLEController(private val context: Context) {
             characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
+            if (characteristic.uuid != characteristicUUID) return
+
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 Log.d("BLE", "Characteristic write successful: ${characteristic.uuid}")
             } else {
                 Log.e("BLE", "Characteristic write failed: $status")
+            }
+
+            processNextPacket()
+        }
+
+        override fun onDescriptorWrite(
+            gatt: BluetoothGatt,
+            descriptor: BluetoothGattDescriptor,
+            status: Int
+        ) {
+            if (descriptor.uuid == cccdUUID && status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d("BLE", "CCCD descriptor write successful")
+
+                Handler(Looper.getMainLooper()).postDelayed({
+                    connectedSignal.emit(Unit)
+                }, 500) // delay
             }
         }
 
@@ -149,77 +171,26 @@ class BLEController(private val context: Context) {
         ) {
             Log.d("BLE", "Characteristic changed: ${characteristic.uuid}")
 
-            val value = characteristic.value
-            if (value.size < 2) {
+            if (value.isEmpty()) {
                 Log.e("BLE", "Received data too short: ${value.size} bytes")
                 return
             }
 
             val packetTypeByte = value[0].toUByte()
-            val fragHeader = value[1].toUByte()
-            val fragmentIndex = (fragHeader.toInt() shr 4) and 0x0F
-            val totalFragments = fragHeader.toInt() and 0x0F
+            val payload = value.sliceArray(1 until value.size)
 
-            val payload = value.sliceArray(2 until value.size)
-
-            Log.d("BLE", "Received fragment $fragmentIndex/$totalFragments for packet type $packetTypeByte")
-
-            if (fragmentIndex == 0) {
-                currentPacketType = PacketType.entries.firstOrNull { it.value == packetTypeByte }
-
-                fragmentBuffer.clear()
-                fragmentBuffer.addAll(payload.toList())
-                expectedFragments = totalFragments
-                receivedFragments = 1
-            } else {
-                // subsequent fragments
-                if (fragmentIndex == receivedFragments) {
-                    fragmentBuffer.addAll(payload.toList())
-                    receivedFragments++
-                } else {
-                    // Out of order fragment; reset
-                    Log.e("BLE", "Out of order fragment: expected $receivedFragments, got $fragmentIndex")
-
-                    fragmentBuffer.clear()
-                    expectedFragments = 0
-                    receivedFragments = 0
-                    currentPacketType = null
-                    return
-                }
+            val packetType = PacketType.entries.firstOrNull { it.value == packetTypeByte }
+            if (packetType == null) {
+                Log.e("BLE", "Unknown packet type: $packetTypeByte")
+                return
             }
 
-            // All fragments present?
-            if (receivedFragments == expectedFragments) {
-                Log.d("BLE", "All fragments received, decoding packet")
+            val packet = PacketFactory.createPacketFromType(packetType)
+            val readBuffer = ReadBuffer(payload)
+            val decodedPacket = packet.decode(readBuffer)
 
-                val packet = currentPacketType?.let { PacketFactory.createPacketFromType(it) }
-
-                if (packet == null) {
-                    Log.e("BLE", "Unknown packet tpye: $packetTypeByte")
-                    return
-                }
-
-                val readBuffer = ReadBuffer(fragmentBuffer.toByteArray())
-                val decodedPacket = packet.decode(readBuffer)
-
-                Log.d("BLE", "Received packet: ${decodedPacket::class.simpleName}")
-
-                if (decodedPacket is MediaCommandPacket) {
-                    Log.d("BLE", "COMMAND: ${decodedPacket.command}")
-                    when (decodedPacket.command) {
-                        1 -> MediaControl.play()
-                        2 -> MediaControl.pause()
-                        3 -> MediaControl.next()
-                        4 -> MediaControl.previous()
-                    }
-                }
-
-                // reset fragmentation state
-                fragmentBuffer.clear()
-                expectedFragments = 0
-                receivedFragments = 0
-                currentPacketType = null
-            }
+            Log.d("BLE", "Received packet: ${decodedPacket::class.simpleName}")
+            packetReceivedSignal.emit(decodedPacket)
         }
     }
 
@@ -299,16 +270,36 @@ class BLEController(private val context: Context) {
             return
         }
 
+        synchronized(packetQueue) {
+            packetQueue.add(packet)
+            if (!isWriting) {
+                isWriting = true
+                processNextPacket()
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun processNextPacket() {
+        val packet: Packet?
+        synchronized(packetQueue) {
+            if (packetQueue.isEmpty()) {
+                isWriting = false
+                return
+            }
+            packet = packetQueue.removeAt(0)
+        }
+
+        if (packet == null) return
+
         val buffer = WriteBuffer()
         packet.encode(buffer)
         val encodedData = buffer.toByteArray()
 
-        val maxChunkSize = 128 - 2
-        val totalLength = encodedData.size
-        val numFragments = (totalLength + maxChunkSize - 1) / maxChunkSize
-
-        if (numFragments > 15) {
-            Log.e("BLE", "Packet of type ${packet.packetType} too large for fragmentation")
+        val maxSize = 128 - 1
+        if (encodedData.size > maxSize) {
+            Log.e("BLE", "Packet too large for single transmission")
+            processNextPacket()
             return
         }
 
@@ -317,54 +308,26 @@ class BLEController(private val context: Context) {
 
         if (characteristic == null) {
             Log.e("BLE", "Characteristic not found")
+            processNextPacket()
             return
         }
 
-        Log.d("BLE", "Sending packet ${packet.packetType} in $numFragments fragments, size: $totalLength bytes")
+        val data = byteArrayOf(packet.packetType.value.toByte()) + encodedData
+        val writeType = characteristic.writeType
 
-        for (i in 0 until numFragments) {
-            val header = byteArrayOf(
-                packet.packetType.value.toByte(),
-                ((i shl 4) or numFragments).toByte()
-            )
+        val code = connectedGatt?.writeCharacteristic(characteristic, data, writeType)
+        val success = code == BluetoothStatusCodes.SUCCESS
 
-            val start = i * maxChunkSize
-            val end = minOf(start + maxChunkSize, totalLength)
-            val chunk = encodedData.copyOfRange(start, end)
-
-            val fragment = header + chunk
-            characteristic.value = fragment
-
-            var success = false
-            var attempts = 0
-            val maxAttempts = 5
-
-            while (!success && attempts < maxAttempts) {
-                success = connectedGatt?.writeCharacteristic(characteristic) == true
-                if (!success) {
-                    attempts++
-                    Log.w("BLE", "Failed to write fragment $i, attempt $attempts")
-                    Thread.sleep(30)
-                }
-            }
-
-            if (!success) {
-                Log.e("BLE", "Failed to send fragment $i after $maxAttempts attempts")
-                return
-            }
-
-            Thread.sleep(200) // avoid overwhelming the esp
+        if (!success) {
+            Log.e("BLE", "Failed to initiate write for packet ${packet.packetType}")
+            processNextPacket()
         }
-
-        Log.d("BLE", "Successfully sent packet: ${packet.packetType}")
     }
 
     private fun hasBlePermissions(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
-                    ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-        } else {
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        }
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) ==
+                PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) ==
+                PackageManager.PERMISSION_GRANTED
     }
 }

@@ -2,7 +2,6 @@ package org.kvxd.nanocompanion
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -18,8 +17,11 @@ import org.kvxd.nanocompanion.ui.BleDeviceScannerScreen
 @OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity(), MediaPacketSender {
 
+    companion object {
+        private const val REQUEST_CODE_BLE = 1001
+    }
+
     private lateinit var bleController: BLEController
-    private val REQUEST_CODE_BLE = 1001
 
     override fun sendMediaInfoPacket(info: MediaControl.MediaInfo) {
         bleController.sendPacket(
@@ -50,6 +52,7 @@ class MainActivity : ComponentActivity(), MediaPacketSender {
         }
 
         bleController = BLEController(this)
+        registerListeners(bleController)
 
         setContent {
             BleDeviceScannerScreen(bleController)
@@ -70,17 +73,11 @@ class MainActivity : ComponentActivity(), MediaPacketSender {
     }
 
     private fun requestPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val perms = arrayOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT
-            )
-            ActivityCompat.requestPermissions(this, perms, REQUEST_CODE_BLE)
-        } else {
-            ActivityCompat.requestPermissions(this, arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION), REQUEST_CODE_BLE
-            )
-        }
+        val perms = arrayOf(
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT
+        )
+        ActivityCompat.requestPermissions(this, perms, REQUEST_CODE_BLE)
     }
 
     @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
